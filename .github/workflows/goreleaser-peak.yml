@@ -65,7 +65,7 @@ jobs:
           PEAK_REF:  ${{ vars.PEAK_REF  || 'main' }}
         run: |
           git clone --depth 1 --branch "$PEAK_REF" "$PEAK_REPO" /tmp/peak
-          cd /tmp/peak/peak
+          cd /tmp/peak
           cargo build --release
           sudo cp target/release/peak /usr/local/bin/peak
 
