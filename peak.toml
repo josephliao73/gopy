@@ -1,0 +1,21 @@
+# Peak task pipeline for gopy — mirrors goreleaser-check.yml
+#
+# Two tasks match the two steps in the original workflow:
+#   1. goreleaser-check  →  goreleaser check
+#   2. goreleaser-snapshot  →  goreleaser release --snapshot --clean
+#
+# build's cache key is derived from the content of all Go source files plus
+# go.mod/go.sum/.goreleaser.yaml. If nothing changed, the 20-25s snapshot
+# build is skipped and dist/ is restored from cache.
+
+[tasks.goreleaser-check]
+command = "goreleaser check"
+inputs  = [".goreleaser.yaml"]
+outputs = []
+
+[tasks.goreleaser-snapshot]
+command     = "goreleaser release --snapshot --clean"
+depends_on  = ["goreleaser-check"]
+inputs      = [".goreleaser.yaml", "go.mod", "go.sum", "version.go"]
+input_globs = ["**/*.go"]
+outputs     = ["dist/"]

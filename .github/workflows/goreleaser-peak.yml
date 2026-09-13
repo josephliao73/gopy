@@ -1,0 +1,97 @@
+name: GoReleaser Check (Peak)
+
+# Drop-in replacement for goreleaser-check.yml that wraps both steps in the
+# Peak task cache. On an unchanged PR push, the 22-26s snapshot build is
+# skipped and dist/ is restored from the cross-run cache in ~1s.
+#
+# Cache key = SHA256(goreleaser.yaml + go.mod + go.sum + version.go + all *.go)
+# computed by Peak from file contents, not timestamps. A script that changes
+# but produces the same output still gets a build cache hit (scenario 3).
+#
+# On first run or any real change, full execution time is identical to the
+# original workflow. The speedup is entirely from skipping unchanged runs.
+
+on:
+  pull_request:
+    branches: [ '**' ]
+    paths:
+      - '.goreleaser.yaml'
+      - '.github/workflows/goreleaser-peak.yml'
+      - '.github/workflows/release-please.yml'
+      - 'go.mod'
+      - 'go.sum'
+      - 'version.go'
+      - '**/*.go'
+      - 'peak.toml'
+  workflow_dispatch:
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          install-only: true
+
+      # Build peak from source. Cargo cache means this is ~2s after first run.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry (peak build)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: peak-cargo-${{ runner.os }}
+
+      - name: Build peak binary
+        env:
+          PEAK_REPO: ${{ vars.PEAK_REPO || 'https://github.com/josephliao/peak' }}
+          PEAK_REF:  ${{ vars.PEAK_REF  || 'main' }}
+        run: |
+          git clone --depth 1 --branch "$PEAK_REF" "$PEAK_REPO" /tmp/peak
+          cd /tmp/peak/peak
+          cargo build --release
+          sudo cp target/release/peak /usr/local/bin/peak
+
+      # Restore the Peak task cache from the previous run. actions/cache saves
+      # it automatically at the end of the job on cache miss.
+      - name: Restore Peak task cache
+        uses: actions/cache@v4
+        with:
+          path: .peak-cache
+          # Key changes when any Go source file, go.mod, go.sum, or .goreleaser.yaml changes.
+          # On a key miss, restore-keys gives us the latest cache entry to build on top of
+          # (Peak's content-addressing handles the rest — old entries stay valid).
+          key: peak-goreleaser-${{ runner.os }}-${{ hashFiles('.goreleaser.yaml', 'go.mod', 'go.sum', 'version.go', '**/*.go') }}
+          restore-keys: |
+            peak-goreleaser-${{ runner.os }}-
+
+      - name: Run goreleaser via Peak
+        run: peak run
+
+      # Print cache size for visibility
+      - name: Cache stats
+        if: always()
+        run: |
+          if [ -d .peak-cache ]; then
+            echo "Peak cache size: $(du -sh .peak-cache | cut -f1)"
+            find .peak-cache -name SUCCESS | wc -l | xargs -I{} echo "Cached task entries: {}"
+          else
+            echo "No Peak cache"
+          fi
