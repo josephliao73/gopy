@@ -47,27 +47,32 @@ jobs:
           version: latest
           install-only: true
 
-      # Build peak from source. Cargo cache means this is ~2s after first run.
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Cargo registry (peak build)
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: peak-cargo-${{ runner.os }}
-
-      - name: Build peak binary
+      # Clone peak first (cheap), then cache the compiled binary keyed on
+      # Cargo.lock. After the first build, subsequent runs skip compilation
+      # entirely — just a cache restore + install.
+      - name: Clone peak
         env:
           PEAK_REPO: ${{ vars.PEAK_REPO || 'https://github.com/josephliao/peak' }}
           PEAK_REF:  ${{ vars.PEAK_REF  || 'main' }}
-        run: |
-          git clone --depth 1 --branch "$PEAK_REF" "$PEAK_REPO" /tmp/peak
-          cd /tmp/peak
-          cargo build --release
-          sudo cp target/release/peak /usr/local/bin/peak
+        run: git clone --depth 1 --branch "$PEAK_REF" "$PEAK_REPO" /tmp/peak
+
+      - name: Cache peak binary
+        id: peak-bin-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/peak/target/release/peak
+          key: peak-binary-${{ runner.os }}-${{ hashFiles('/tmp/peak/Cargo.lock') }}
+
+      - name: Set up Rust
+        if: steps.peak-bin-cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Compile peak
+        if: steps.peak-bin-cache.outputs.cache-hit != 'true'
+        run: cd /tmp/peak && cargo build --release
+
+      - name: Install peak
+        run: sudo cp /tmp/peak/target/release/peak /usr/local/bin/peak
 
       # Restore the Peak task cache from the previous run. actions/cache saves
       # it automatically at the end of the job on cache miss.
